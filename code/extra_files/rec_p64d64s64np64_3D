@@ -1,3 +1,0 @@
-#pixels =  64, #detectors =  64, #steps =  64, #rays =  4096, #planes= 64
- pxl_wd = 0.6340000cm, det_wd = 0.6340000cm, plane_wd = 0.6340000cm
- rec. diameter = 40.576cm, r_major = 19.844cm, r_minor = 19.844cm
