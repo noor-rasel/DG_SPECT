@@ -1,38 +1,29 @@
-path_setting;
+addpath(pwd);
 
-addpath(recon_root_folder+"code/");       
-addpath(recon_root_folder+"code/4D SPECT recon with ASC/4D/");
-addpath(recon_root_folder+"code/4D SPECT recon with ASC/weight_gen/");
-addpath(recon_root_folder+"code/extra_files/",'-begin');
+% Define root folder 
+root_folder = fileparts(pwd);
 
-data_root_folder = simind_attn_data_root_folder + "all_phases";
+% Define data directories
+data_root_folder = fullfile(root_folder, 'Female_data', 'NCAT_female_case1', 'all_phases');
+attn_data_folder = fullfile(root_folder, 'Female_data', 'NCAT_female_case1');
+
+# Initialize arrays
 projections = zeros(64,64,64,8);
 recon_3d_card_phases = zeros(64,64,64,8,8);
 recon_4d_card_phases = zeros(64,64,64,8,8);
-recon_4d_card_resp_phases = zeros(64,64,64,8,8);
+recon_4d_card_resp_phases = zeros(64,64,64,8,8); 
+
+# Parameters
 total_counts = 8e6;
 total_counts_rp_1 = total_counts / 8;
 blur = 1; 
 OF_tag=0; 
 load('roi.mat');
+rng(20230110);
 
-% === Get seed from environment ===
-rand_seeds = [1, 4477, 8980, 1235321, 888888888, ...
-             19971212, 123456789, 84847234, 6950321, ...
-             123, 999999999, 7832645, 5543689, ...
-             77234441, 2869, 13579, 595964237, ...
-             2368475, 39645, 47, 10101, 8764101, ...
-             4120339, 249988, 22740, 589033, ...
-             657723, 20230110, 687321365, 95632113];
-
-seed_index = str2double(getenv('seed_i'));
-rng(rand_seeds(seed_index));  % Seed the random number generator
-
-% rng(20230110);
-
+%% === Loop over Respiratory Phases ===
 for resp = 0 : 7
     % fprintf('\n>>> Respiratory Phase %d <<<\n', resp + 1);
-
     %% === Load Simind Projections Data for All Cardiac Phases ===
     for cardica = 0 : 7
         filename = sprintf('%s/cardica%d_resp_%d/cardiac%d_tot_w1.a00', data_root_folder, cardica+1, resp+1, cardica+1);
@@ -43,7 +34,7 @@ for resp = 0 : 7
         projections(:,:,:,cardica+1) = simind;
     end
 
-    %% === Rotate projections and normalize ===
+    %% === Rotate projections  ===
     for i = 1:8
         cur_proj = projections(:,:,:,i);
         for j = 1:64
@@ -52,14 +43,13 @@ for resp = 0 : 7
         projections(:,:,:,i) = cur_proj;
     end
 
-    % fprintf('Total counts before norm: %d\n', sum(projections(:)));
-    projections=projections/sum(projections(:)) * total_counts_rp_1;
-    % fprintf('Total counts after norm: %d', sum(projections(:)));
+    %% --- Normalize and add Poisson noise ---
+    projections = projections / sum(projections(:)) * total_counts_rp1;
     projections = random('poiss', projections);
 
-    %% preparing system matrix using attenuation map
+    %% --- Attenuation Correction Factors ---
     load weight64_mn        
-    filename = sprintf('%s/cardiac8_atn_avg.bin', simind_attn_data_root_folder); % averaged attenuation map
+    filename = fullfile(attn_data_folder, 'cardiac8_atn_avg.bin');
     fid=fopen(filename,'r');
     x=fread(fid,64^3,'single');
     fclose(fid);
@@ -68,7 +58,6 @@ for resp = 0 : 7
     x = flip(x, 3); 
     wp_attnwgt=cell(4096,1); 
 
-    % calculation of attenuation correction factors
     for n=1:64
         if n<33
             wp_attnwgt((n-1)*64+1:n*64)=attnmat(x,n,wp_vray((n-1)*64+1:n*64),...
@@ -81,21 +70,21 @@ for resp = 0 : 7
         end
     end
 
-    % Find maximum attenuation factor per angle
-    for j=1:64
-        for i=1:64
-            wp=wp_attnwgt{(j-1)*64+i}; 
-            wp_S(i)=max(sum(wp)); 
+    % Normalize attenuation factors
+    wp_M = zeros(64,1);
+    for j = 1:64
+        for i = 1:64
+            wp = wp_attnwgt{(j-1)*64+i};
+            wp_S(i) = max(sum(wp));
         end
-        wp_M(j)=max(wp_S); 
-    end 
+        wp_M(j) = max(wp_S);
+    end
 
-    % find maximum attenuation factor across all angles and normalize for all detectors 
-    for j=1:64
-        for i=1:64
-            wp_attnwgt{(j-1)*64+i}=wp_attnwgt{(j-1)*64+i}/max(wp_M);
+    for j = 1:64
+        for i = 1:64
+            wp_attnwgt{(j-1)*64+i} = wp_attnwgt{(j-1)*64+i} / max(wp_M);
         end
-    end 
+    end
     save('weight64_attn1.mat', 'wp_attnwgt');
 
     %% === 3D Reconstruction ===
@@ -111,7 +100,7 @@ for resp = 0 : 7
     recon_3d_card_phases(:,:,:,:,resp+1) = Im_maps;
     save('recon_3d_card_phases_averaged.mat', "recon_3d_card_phases");
 
-    %% === Estimate Cardiac Motion===
+   %% --- Cardiac Motion Estimation ---
     G = 8;
     yin=zeros(size(Im_maps));
     for g=1:G
@@ -160,7 +149,7 @@ for resp = 0 : 7
     end
 end 
 
-%% === Estimate Respiratory Motion ===
+%% === Respiratory Motion Estimation ===
 recon_4d_card_phases_reduced = squeeze(sum(recon_4d_card_phases, 4)); % sum across card phases
 recon_4d_card_phases_DVF = zeros(64,64,64,3,8,8);
 
@@ -192,6 +181,7 @@ for i = 1:8
 end
 
 save('recon_4d_card_resp_phases_averaged.mat',"recon_4d_card_resp_phases");
+fprintf('\n=== 4D Reconstruction Completed Successfully ===\n');
 
 
 
